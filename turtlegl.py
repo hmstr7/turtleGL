@@ -73,6 +73,8 @@ class Turtle:
         self.window = window
         self.ctx = window.ctx
         self.window.turtles.append(self)
+        self.wwidth = window.width
+        self.wheight = window.height
 
         # High level props
         self.position = init_pos
@@ -167,6 +169,7 @@ class Turtle:
     def __pointTurtleToGL(self, a: tuple):
         """
         Converts a point from turtle-like coordinates to OpenGL coordinates.
+        Warning: this is slow and should not be used with arrays
         Args:
             a (tuple): A tuple (x, y) representing the point in turtle-like coordinates.
         Returns:
@@ -176,8 +179,8 @@ class Turtle:
         """
         if len(a) != 2:
             raise ValueError("Point must be a tuple of length 2")
-        normalized_x = a[0] / (self.window.width / 2)
-        normalized_y = a[1] / (self.window.height / 2)
+        normalized_x = a[0] / (self.wwidth / 2)
+        normalized_y = a[1] / (self.wheight / 2)
         return (normalized_x, normalized_y)
     
     def __draw(self):
@@ -252,7 +255,20 @@ class Turtle:
         self.__draw() # Render 
 
     @__active
-    def goto_path(self, points:list[tuple[float,float]] | np.ndarray, cleanCoords=False, color=None):
+    def goto_path(self, points:list[tuple[float,float]] | np.ndarray, cleanCoords:bool=False, color:tuple[float,float]=None):
+        '''
+        Draws a path of points.
+        It is a more efficient way to draw large structures (say, a million points) than calling goto() a million times.
+        Also speeds up drasrically if supplied directly with 'clean' coordinates that are:
+        - a NumPy array of shape (N, 2) 
+        - of datatype float32 (f4)
+        - each point already in OpenGL coordinates (ranged from -1.0 to 1.0)
+        Args:
+            points (list or np.ndarray): A list of tuples or a NumPy array of shape (N, 2) representing the points to draw.
+            cleanCoords (bool): When False (by default), it means that the coordinates must be sanitized and transformed properly before rendering. If True, coords are assumed clean (see requirements above) and can be used in a more direct, faster way. Put True only if you are sure about data provided being correct, else unexpected and unhandled behavior may occur.
+        Returns:
+            None
+        '''
         self.__debug(f"Goto bulk {points}")
         
         if color:
@@ -269,10 +285,12 @@ class Turtle:
                     points = points.astype('f4')
 
                 # Assume turtle-like coords, convert. TODO: replace later with a bulk GPU-based conversion
-                gl_points = np.empty_like(points)
+                """ gl_points = np.empty_like(points)
                 for i, p in enumerate(points):
-                    gl_points[i] = self.__pointTurtleToGL(tuple(p))
-
+                    gl_points[i] = self.__pointTurtleToGL(tuple(p)) """
+                
+                # Faster conversion (allegedly)
+                gl_points = np.divide(points, np.array([(self.wwidth/2, self.wheight/2)],dtype='f4'))
             else:
                 # Assume list of tuples
                 gl_points = np.array([self.__pointTurtleToGL(p) for p in points], dtype='f4')
@@ -370,10 +388,12 @@ def start(debug=False):
     else:
         logger.setLevel(logging.WARNING)
 
+    try:
+        pyglet.app.run()
+    except KeyboardInterrupt:
+        close()
 
-    pyglet.app.run()
-
-def close(window: Window):
+def close():
     """Close the application."""
     logger.debug("Closing application")
     pyglet.app.exit()
