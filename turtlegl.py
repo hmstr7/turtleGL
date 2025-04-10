@@ -5,18 +5,18 @@ from utils import load_shader
 import numpy as np
 
 import logging
+import sys
+from typing import Callable
 """ import timeit """
 
 DEBUG = False
-logger = logging.getLogger(__name__)
 
-if DEBUG:
-    logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("turtlegl")
 
 class Window(pyglet.window.Window):
     def __init__(self, width=500,height=500, title="TurtleGL", resizable=True, vsync=False,**kwargs):
         # OpenGL and pyglet setup
-        logging.debug(f"Initializing window {self}")
+        self.__debug(f"Initializing window {self}")
         super().__init__(width=width,height=height,caption=title,resizable=resizable, **kwargs)
         self.ctx = moderngl.create_context()
         self.ctx.viewport = (0, 0, self.width, self.height)
@@ -28,14 +28,16 @@ class Window(pyglet.window.Window):
 
         self.mainloop = None
         self.needs_redraw = True  # Flag to indicate if a redraw is needed
-   
+    def __debug(self, msg:str):
+        """Debugging wrapper for DEBUG level logs"""
+        logger.debug(msg)
     def on_draw(self):
         self.clear()
         self.ctx.clear(0.1, 0.1, 0.1, 1.0)
         self.clock.tick()
         if self.needs_redraw:  # Only call mainloop if redraw is needed
             try:
-                logger.debug("Calling mainloop")
+                self.__debug("Calling mainloop")
                 if not self.mainloop:
                     raise NotImplementedError("No mainloop set. Did you forget to call run() on your main function?")
                 self.mainloop()
@@ -47,11 +49,11 @@ class Window(pyglet.window.Window):
                 for turtle in self.turtles:
                     turtle._Turtle__draw()
             except Exception as e:
-                logger.error(f"Turtle draw call error: {e}")
+                logging.error(f"Turtle draw call error: {e}")
 
     def request_redraw(self):
         """Call this method to request a rerun of the mainloop."""
-        logger.debug("Redraw requested")
+        self.__debug("Redraw requested")
         self.needs_redraw = True
     
     # Some correct changes handling (nothing important)
@@ -65,27 +67,35 @@ class Window(pyglet.window.Window):
         return super().on_close()
 
 class Turtle:
-    def __init__(self, window: Window):
-        logger.debug(f"Initializing turtle {self}")
+    def __init__(self, window: Window, color=(1.0, 0.0,0.0), init_pos=(0.0, 0.0)):
+        self.__debug(f"Initializing turtle {self}")
         # Window binding
         self.window = window
         self.ctx = window.ctx
         self.window.turtles.append(self)
 
         # High level props
-        self.position = (0.0, 0.0)
+        self.position = init_pos
         """
         The position is a tuple of (x,y) coordinates in the range [-screen_width/2, screen_width/2] and [-screen_height/2, screen_height/2] respectively.
         However, OpenGL uses a different coordinate system (in the range -1, 1), so we need to convert the coordinates to OpenGL coordinates.
         Use the __pointTurtleToGL method to convert the coordinates from turtle-like to the ones used by OpenGL.
         Vice versa for __pointGLToTurtle.
         """
-        self.color = (1.0, 0.0, 0.0)
+        self.color = color
         self.thickness = 1.0
+        
+        self.__sleeptime = 0.0 # Time to sleep in seconds (used for scheduling)
+
 
         # OpenGL setup
         self.__setupOpenGL() 
-        
+    
+    def __debug(self, msg:str):
+        """Debugging wrapper for DEBUG level logs"""
+        logger.debug(msg)#, extra={"turtlename", self.__qualname__})
+
+    # OpenGL magic
     def __setupOpenGL(self):
         """
         Simply a macros-like function to setup OpenGL 
@@ -95,7 +105,7 @@ class Turtle:
         - Setup default OpenGL render mode to LINE_STRIP (connected lines);
         - TODO
         """
-        logger.debug("Setting up OpenGL")
+        self.__debug("Setting up OpenGL")
         self.__render_mode = self.ctx.LINE_STRIP
         self.__vertices = np.array(
             [*self.__pointTurtleToGL(self.position)],
@@ -116,10 +126,10 @@ class Turtle:
         # Bind uniforms       
         self.__prog['color']=self.color
         
-        logger.debug("OpenGL setup complete") # Add stuff here to debug
+        self.__debug("OpenGL setup complete") # Add stuff here to debug
 
     def __updateOpenGL(self):
-        logger.debug(f"""Updating OpenGL
+        self.__debug(f"""Updating OpenGL
 - vertices: \n {self.__vertices.reshape(-1,2)}\n""")
         
         # Buffer update
@@ -163,15 +173,36 @@ class Turtle:
         normalized_y = a[1] / (self.window.height / 2)
         return (normalized_x, normalized_y)
     
-
     def __draw(self):
         """
         Renders all vertices using current OpenGL render mode. This function should be called after any impactful method call.
         """
-        #print("draw call")
         self.__vao.render(mode=self.__render_mode, vertices=len(self.__vertices)//2) # Draw the line using the current render mode
-        
-    def goto(self, point, color=(1.0, 0.0, 0.0)):
+
+    # Scheduling
+    def __schedule(self, func: Callable):
+        delay = self.__sleeptime
+        self.window.clock.schedule_once(func, delay=delay)
+        self.__debug(f"Function {func.__name__} will be called in {delay}")
+        self.__sleeptime = 0.0 # Reset the sleep time after scheduling
+    @staticmethod
+    def __active(func):
+        """
+        A decorator for methods that have an effect on this object and must be scheduled.
+        """
+        def wrapper(self, *args, **kwargs):
+            # Schedule the function to run after a short delay
+            self.__debug(f"Scheduling {func.__name__} with args: {args}, kwargs: {kwargs}")
+            def scheduled_call(dt):
+                func(self, *args, **kwargs)
+
+            self.__schedule(scheduled_call)
+            return None  # Return None since the function is scheduled
+        return wrapper
+
+    
+    @__active
+    def goto(self, point:tuple, color=None):
         """
         Moves the turtle to a specified position and draws a line to it.
         Args:
@@ -186,11 +217,13 @@ class Turtle:
         Returns:
             None
         """
-
-        print("goto", point)
+        self.__debug(f"Goto {point}")
         
+        """ self.__demandExecution(self.goto, point=point, color=color) """ # Schedule the call to goto
+
         # High level stuff
-        self.color = color
+        if color:
+            self.color = color
         self.position = point
 
         # Convert the current position to OpenGL coordinates
@@ -206,18 +239,69 @@ class Turtle:
         self.__updateOpenGL() # Update buffer to include new point
 
         self.__draw() # Render 
-            
+
+    @__active
+    def setColor(self, color:tuple):
+        """
+        Sets the color of the turtle.
+        Args:
+            color (tuple): A tuple (r, g, b) representing the color in RGB format.
+                           Each value should be in the range [0.0, 1.0].
+        Returns:
+            None
+        """
+        self.__debug(f"Setting color to {color}")
+        self.color = color
+        
+        self.__updateOpenGL()
+        self.__draw()
+
+    def sleep(self, seconds: int | float):
+        """
+        Pauses the execution for a specified number of seconds without blocking the event loop.
+        Args:
+            seconds (float): The number of seconds to sleep.
+        Returns:
+            None
+        """
+        self.__debug(f"Sleeping for {seconds} seconds")
+
+        self.__sleeptime = seconds # Set the sleep time
+
 def run(window: Window):
     def decorator(function):
         window.mainloop = function
-        logging.debug(f"Mainloop set to {function.__name__} at {hex(id(function))}")
+        logger.debug(f"Mainloop set to {function.__name__} at {hex(id(function))}")
         return function
     return decorator
 
 def start(debug=False):
     """Run the TurtleGL application."""
-    global DEBUG
+    global DEBUG, logger
     DEBUG = debug
+
+    logger.propagate = False  # Prevent logs from being passed to the root logger
+
+    # Remove any existing handlers to avoid duplicates
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    if DEBUG:
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.DEBUG)
+
+        formatter = logging.Formatter(
+            '%(asctime)s | %(name)s | %(levelname)-8s | %(message)s',
+            datefmt='%H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+
+        logger.addHandler(handler)
+    else:
+        logger.setLevel(logging.WARNING)
+
+
     pyglet.app.run()
 
 if __name__ == "__main__":
