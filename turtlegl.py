@@ -7,7 +7,7 @@ import numpy as np
 import logging
 import sys
 from typing import Callable
-""" import timeit """
+from timeit import timeit
 
 DEBUG = False
 
@@ -67,7 +67,7 @@ class Window(pyglet.window.Window):
         return super().on_close()
 
 class Turtle:
-    def __init__(self, window: Window, color=(1.0, 0.0,0.0), init_pos=(0.0, 0.0)):
+    def __init__(self, window: Window, color=(1.0, 0.0,0.0), init_pos=(0.0, 0.0), max_vertices=10_000):
         self.__debug(f"Initializing turtle {self}")
         # Window binding
         self.window = window
@@ -89,14 +89,14 @@ class Turtle:
 
 
         # OpenGL setup
-        self.__setupOpenGL() 
+        self.__setupOpenGL(max_vertices=max_vertices)
     
     def __debug(self, msg:str):
         """Debugging wrapper for DEBUG level logs"""
         logger.debug(msg)#, extra={"turtlename", self.__qualname__})
 
     # OpenGL magic
-    def __setupOpenGL(self):
+    def __setupOpenGL(self, max_vertices:int):
         """
         Simply a macros-like function to setup OpenGL 
         with the sole reason of being separated from the constructor 
@@ -106,16 +106,24 @@ class Turtle:
         - TODO
         """
         self.__debug("Setting up OpenGL")
+
         self.__render_mode = self.ctx.LINE_STRIP
-        self.__vertices = np.array(
-            [*self.__pointTurtleToGL(self.position)],
-            dtype='f4'
-        )
+
+        # Preallocate array of fixed size for vertices
+        self.__max_vertices = max_vertices
+        self.__vertices = np.zeros((self.__max_vertices, 2), dtype='f4')
+        self.__vertex_count = 0
+
+        # Add initial position
+        self.__vertices[0] = self.__pointTurtleToGL(self.position)
+        self.__vertex_count = 1
+
+
         self.__prog = self.ctx.program(
             vertex_shader=load_shader("shaders/line.vert"),
             fragment_shader=load_shader("shaders/line.frag"),
         )# Shader prog 
-        self.__vbo = self.ctx.buffer(self.__vertices.tobytes()) #  Vertex buffer (in VRAM)
+        self.__vbo = self.ctx.buffer(self.__vertices[:self.__vertex_count].tobytes()) #  Vertex buffer (in VRAM)
         self.__vao = self.ctx.vertex_array(
             self.__prog, 
             self.__vbo, 
@@ -130,12 +138,11 @@ class Turtle:
 
     def __updateOpenGL(self):
         self.__debug(f"""Updating OpenGL
-- vertices: \n {self.__vertices.reshape(-1,2)}\n""")
+- vertices: \n {self.__vertices[:self.__vertex_count]}\n""")
         
         # Buffer update
-        self.__vbo.clear()
-        self.__vbo.orphan(size=self.__vertices.nbytes)
-        self.__vbo.write(self.__vertices.tobytes())
+        self.__vbo.orphan(size=self.__vertices[:self.__vertex_count].nbytes)
+        self.__vbo.write(self.__vertices[:self.__vertex_count].tobytes())
 
         # Update uniforms
         self.ctx.line_width = self.thickness
@@ -177,7 +184,7 @@ class Turtle:
         """
         Renders all vertices using current OpenGL render mode. This function should be called after any impactful method call.
         """
-        self.__vao.render(mode=self.__render_mode, vertices=len(self.__vertices)//2) # Draw the line using the current render mode
+        self.__vao.render(mode=self.__render_mode, vertices=self.__vertex_count) # Draw the line using the current render mode
 
     # Scheduling
     def __schedule(self, func: Callable):
@@ -193,11 +200,17 @@ class Turtle:
         def wrapper(self, *args, **kwargs):
             # Schedule the function to run after a short delay
             self.__debug(f"Scheduling {func.__name__} with args: {args}, kwargs: {kwargs}")
-            def scheduled_call(dt):
-                func(self, *args, **kwargs)
-
-            self.__schedule(scheduled_call)
-            return None  # Return None since the function is scheduled
+            
+            if self.__sleeptime > 0.0:
+                # If sleep time is set, schedule the function with the delay
+                def scheduled_call():
+                    func(self, *args, **kwargs)
+                self.__debug(f"Scheduling {func.__name__} with delay {self.__sleeptime}")
+                self.window.clock.schedule_once(scheduled_call, delay=self.__sleeptime)
+                self.__schedule(scheduled_call)
+                return None  # Return None since the function is scheduled
+            else:
+                return func(self, *args, **kwargs) # Possible speed boost
         return wrapper
 
     
@@ -218,8 +231,6 @@ class Turtle:
             None
         """
         self.__debug(f"Goto {point}")
-        
-        """ self.__demandExecution(self.goto, point=point, color=color) """ # Schedule the call to goto
 
         # High level stuff
         if color:
@@ -227,18 +238,63 @@ class Turtle:
         self.position = point
 
         # Convert the current position to OpenGL coordinates
-        current_pos = self.__pointTurtleToGL(self.position)
+        gl_pos = self.__pointTurtleToGL(self.position)
 
-        # Check if the current position is already the last vertex
-        if len(self.__vertices) < 2 or not np.array_equal(self.__vertices[-2:], current_pos):
-            #self.__vertices = np.append(self.__vertices, current_pos)
-            self.__vertices = np.concatenate((self.__vertices, np.array([*current_pos], dtype='f4')))
+        if self.__vertex_count >= self.__max_vertices:
+            logger.warning("Vertex buffer full — cannot add more points")
+            return
 
-
+        self.__vertices[self.__vertex_count] = gl_pos
+        self.__vertex_count += 1
 
         self.__updateOpenGL() # Update buffer to include new point
 
         self.__draw() # Render 
+
+    @__active
+    def goto_path(self, points:list[tuple[float,float]] | np.ndarray, cleanCoords=False, color=None):
+        self.__debug(f"Goto bulk {points}")
+        
+        if color:
+            self.color = color
+        self.position = points[-1]  # Update the position to the last point in the list
+        
+        if not cleanCoords:
+            # Tedious cleaning and conversion to OpenGL coords
+            if isinstance(points, np.ndarray):
+                # Validate shape and dtype
+                if points.shape[1] != 2:
+                    raise ValueError("NumPy array must be of shape (N, 2)")
+                if points.dtype != np.float32:
+                    points = points.astype('f4')
+
+                # Assume turtle-like coords, convert. TODO: replace later with a bulk GPU-based conversion
+                gl_points = np.empty_like(points)
+                for i, p in enumerate(points):
+                    gl_points[i] = self.__pointTurtleToGL(tuple(p))
+
+            else:
+                # Assume list of tuples
+                gl_points = np.array([self.__pointTurtleToGL(p) for p in points], dtype='f4')
+        else:
+            # Coords are already clean and nice
+            gl_points = points if isinstance(points, np.ndarray) else np.array(points, dtype='f4')
+
+        count = len(gl_points)
+
+        # Safety check
+        if self.__vertex_count + count > self.__max_vertices:
+            logger.warning(f"Turtle vertex buffer overflow: trying to add {count} points at {self.__vertex_count}")
+            count = self.__max_vertices - self.__vertex_count
+            gl_points = gl_points[:count]
+
+        # Bulk insert
+        self.__vertices[self.__vertex_count:self.__vertex_count + count] = gl_points
+        self.__vertex_count += count
+        self.__vertices
+
+        self.__updateOpenGL() # Update buffer to include new points
+        self.__draw() # Render
 
     @__active
     def setColor(self, color:tuple):
@@ -268,12 +324,25 @@ class Turtle:
 
         self.__sleeptime = seconds # Set the sleep time
 
+    # Debug 
+    def get_vertex_count(self, real=False):
+        """
+        Returns the number of vertices in the vertex buffer.
+        Returns:
+            int: The number of vertices in the vertex buffer.
+        """
+        if not real:
+            return self.__vertex_count
+        else:
+            return self.__vertices.size / 2
 def run(window: Window):
     def decorator(function):
         window.mainloop = function
         logger.debug(f"Mainloop set to {function.__name__} at {hex(id(function))}")
         return function
     return decorator
+
+
 
 def start(debug=False):
     """Run the TurtleGL application."""
@@ -303,6 +372,11 @@ def start(debug=False):
 
 
     pyglet.app.run()
+
+def close(window: Window):
+    """Close the application."""
+    logger.debug("Closing application")
+    pyglet.app.exit()
 
 if __name__ == "__main__":
     window = Window()
