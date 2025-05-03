@@ -41,6 +41,8 @@ class Window(pyglet.window.Window):
                 if not self.mainloop:
                     raise NotImplementedError("No mainloop set. Did you forget to call run() on your main function?")
                 self.mainloop()
+                for turtle in self.turtles:
+                    turtle._Turtle__appendix()
                 self.needs_redraw = False  # Reset the flag after drawing
             except Exception as e:
                 logger.error(f"Error while rendering frame: {e}")
@@ -87,15 +89,19 @@ class Turtle:
         self.color = color
         self.thickness = 1.0
         
+        self.__cumulative_path:np.ndarray = np.array([*self.position], dtype='f4') # Cumulative path of the turtle (used for goto_path)
+
         self.__sleeptime = 0.0 # Time to sleep in seconds (used for scheduling)
 
 
         # OpenGL setup
         self.__setupOpenGL(max_vertices=max_vertices)
     
+    # Utility methods
     def __debug(self, msg:str):
         """Debugging wrapper for DEBUG level logs"""
         logger.debug(msg)#, extra={"turtlename", self.__qualname__})
+
 
     # OpenGL magic
     def __setupOpenGL(self, max_vertices:int):
@@ -189,12 +195,14 @@ class Turtle:
         """
         self.__vao.render(mode=self.__render_mode, vertices=self.__vertex_count) # Draw the line using the current render mode
 
+
     # Scheduling
     def __schedule(self, func: Callable):
         delay = self.__sleeptime
         self.window.clock.schedule_once(func, delay=delay)
         self.__debug(f"Function {func.__name__} will be called in {delay}")
         self.__sleeptime = 0.0 # Reset the sleep time after scheduling
+
     @staticmethod
     def __active(func):
         """
@@ -206,6 +214,8 @@ class Turtle:
             
             if self.__sleeptime > 0.0:
                 # If sleep time is set, schedule the function with the delay
+                
+                
                 def scheduled_call():
                     func(self, *args, **kwargs)
                 self.__debug(f"Scheduling {func.__name__} with delay {self.__sleeptime}")
@@ -216,9 +226,11 @@ class Turtle:
                 return func(self, *args, **kwargs) # Possible speed boost
         return wrapper
 
-    
+
+
+    # High level methods
     @__active
-    def goto(self, point:tuple, color=None):
+    def old_goto(self, point:tuple, color=None):
         """
         Moves the turtle to a specified position and draws a line to it.
         Args:
@@ -253,7 +265,7 @@ class Turtle:
         self.__updateOpenGL() # Update buffer to include new point
 
         self.__draw() # Render 
-
+    
     @__active
     def goto_path(self, points:list[tuple[float,float]] | np.ndarray, cleanCoords:bool=False, color:tuple[float,float]=None):
         '''
@@ -273,13 +285,14 @@ class Turtle:
         
         if color:
             self.color = color
+        
         self.position = points[-1]  # Update the position to the last point in the list
         
         if not cleanCoords:
             # Tedious cleaning and conversion to OpenGL coords
             if isinstance(points, np.ndarray):
                 # Validate shape and dtype
-                if points.shape[1] != 2:
+                if len(points.shape) < 2 or points.shape[1] != 2:
                     raise ValueError("NumPy array must be of shape (N, 2)")
                 if points.dtype != np.float32:
                     points = points.astype('f4')
@@ -313,7 +326,16 @@ class Turtle:
 
         self.__updateOpenGL() # Update buffer to include new points
         self.__draw() # Render
-
+    
+    def goto(self, point:tuple[float,float]):
+        """
+        Cumulative goto is a convenience wrapper method to build a path out of points one by one (see goto_path function)
+        
+        As for now, the color change is not supported. The color used will be the last one set by setColor.
+        Furthermore, sleeping/scheduling is not supported either (yet)
+        """
+        self.__cumulative_path = np.append(self.__cumulative_path, point).reshape(-1, 2) # Insert the new point at the end of the path
+    
     @__active
     def setColor(self, color:tuple):
         """
@@ -342,6 +364,20 @@ class Turtle:
 
         self.__sleeptime = seconds # Set the sleep time
 
+
+    # Extra methods
+    def __appendix(self):
+        """
+        Must be called after the execution of the main loop.
+        """
+        # To improve later
+
+
+        # Cumulative ending 
+        if self.__cumulative_path.size > 1:
+            self.goto_path(self.__cumulative_path, cleanCoords=False)
+
+
     # Debug 
     def get_vertex_count(self, real=False):
         """
@@ -353,6 +389,7 @@ class Turtle:
             return self.__vertex_count
         else:
             return self.__vertices.size / 2
+
 def run(window: Window):
     def decorator(function):
         window.mainloop = function
