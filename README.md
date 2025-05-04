@@ -4,9 +4,9 @@ TurtleGL is a Python-based graphics library made purely for fun (please do not u
 
 ## Features
 
-- **Overengineering** Using ModernGL OpenGL wrapper + pyglet to write the most delicious spaghetti code ever.
-- **1 % of actual turtle functionality** As for now
-- **Turtle on a GPU!** 
+- **Overengineering**: Using ModernGL OpenGL wrapper + pyglet to write the most delicious spaghetti code ever.
+- **1 % of actual turtle functionality**: As for now
+- **Turtle on the GPU!** 
 
 ## Installation
 (No PyPI package yet)
