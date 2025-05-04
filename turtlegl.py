@@ -119,7 +119,7 @@ class Turtle:
 
         # Preallocate array of fixed size for vertices
         self.__max_vertices = max_vertices
-        self.__vertices = np.zeros((self.__max_vertices, 2), dtype='f4')
+        self.__vertices = np.zeros((self.__max_vertices, 2+3+1), dtype='f4') # 2D points with 3D color and 1D visibility (x,y,r,g,b,v)
         self.__vertex_count = 0
 
         # Add initial position

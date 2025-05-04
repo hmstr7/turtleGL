@@ -1,16 +1,15 @@
 # TurtleGL
 
-TurtleGL is a Python-based graphics library that combines the simplicity of the classic Turtle module with the power of OpenGL for rendering. It allows users to create graphical applications with modern rendering techniques while maintaining an easy-to-use interface.
+TurtleGL is a Python-based graphics library made purely for fun (please do not use it for any serious purposes). It is a small stupid experiment I did because I thought normal turtle lacks parallelism (no, I did not implement parallelism and multithreading yet). If you wish to fill your GPU VRAM with garbage and waste your system's resources, TurtleGL is definitely for you. 
 
 ## Features
 
-- **Modern OpenGL Rendering**: Leverages `moderngl` for efficient and high-quality rendering.
-- **Turtle-like API**: Provides a familiar interface for users who have worked with the Turtle module.
-- **Customizable Graphics**: Supports custom colors, line thickness, and more.
-- **Event Handling**: Built on `pyglet`, enabling advanced event handling and window management.
-- **Debugging Support**: Includes logging and debugging tools for easier development.
+- **Overengineering** Using ModernGL OpenGL wrapper + pyglet to write the most delicious spaghetti code ever.
+- **1 % of actual turtle functionality** As for now
+- **Turtle on a GPU!** 
 
 ## Installation
+(No PyPI package yet)
 
 1. Clone the repository:
    ```bash
@@ -21,12 +20,7 @@ TurtleGL is a Python-based graphics library that combines the simplicity of the 
 2. Install the required dependencies:
    ```bash
    pip install -r requirements.txt
-   ```
-
-   Ensure you have the following Python packages installed:
-   - `moderngl`
-   - `pyglet`
-   - `numpy`
+   ```   
 
 3. (Optional) Install a compatible OpenGL driver if not already installed.
 
@@ -56,36 +50,15 @@ def main():
 # Start the application
 start(debug=True)
 ```
-
-### Key Classes and Functions
-
-- **`Window`**: Represents the main application window. Handles OpenGL context and event management.
-- **`Turtle`**: Represents a drawable object. Provides methods like `goto` for moving and drawing.
-- **`run`**: A decorator to set the main loop function.
-- **`start`**: Starts the application and enters the main event loop.
+See wiki (WIP) for more details
 
 ## Development
-
-### Project Structure
-
-```
-turtleGL/
-├── shaders/             # Directory for custom shaders
-├── turtlegl.py          # Main library file
-├── utils.py             # Small global utilitary functions
-├── example.py           # Example usage and testing file
-└── README.md            # Project documentation
-```
-
-### Logging
-
-Logging is handled using Python's `logging` module. To enable debug logs, set the `DEBUG` variable to `True` in `turtlegl.py` or call `start(debug=True)`.
 
 ### Contributing
 
 TODO
 
-## License
+### License
 
 This project isn't licensed yet. 
 
