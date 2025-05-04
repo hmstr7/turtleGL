@@ -13,7 +13,7 @@ TurtleGL is a Python-based graphics library made purely for fun (please do not u
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/hmstr7/turtleGL.git
    cd turtleGL
    ```
 
