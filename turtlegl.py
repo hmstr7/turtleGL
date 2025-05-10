@@ -69,7 +69,7 @@ class Window(pyglet.window.Window):
         return super().on_close()
 
 class Turtle:
-    def __init__(self, window: Window, color=(1.0, 0.0,0.0), init_pos=(0.0, 0.0), max_vertices=10_000):
+    def __init__(self, window: Window, color=(1.0, 0.0,0.0), init_pos:tuple[int,int]=(0,0), max_vertices=10_000):
         self.__debug(f"Initializing turtle {self}")
         # Window binding
         self.window = window
@@ -87,15 +87,16 @@ class Turtle:
         Vice versa for __pointGLToTurtle.
         """
         self.color = color
-        self.thickness = 1.0
-        
-        self.__cumulative_path:np.ndarray = np.array([*self.position], dtype='f4') # Cumulative path of the turtle (used for goto_path)
+        self.alpha = 1.0
+        #self.thickness = 1.0
 
+        # Other
         self.__sleeptime = 0.0 # Time to sleep in seconds (used for scheduling)
-
 
         # OpenGL setup
         self.__setupOpenGL(max_vertices=max_vertices)
+
+        self.__debug(f"OpenGL setup complete for turtle {self}")
     
     # Utility methods
     def __debug(self, msg:str):
@@ -113,36 +114,40 @@ class Turtle:
         - Setup default OpenGL render mode to LINE_STRIP (connected lines);
         - TODO
         """
-        self.__debug("Setting up OpenGL")
+        self.__debug("Setting up OpenGL...")
 
         self.__render_mode = self.ctx.LINE_STRIP
 
         # Preallocate array of fixed size for vertices
         self.__max_vertices = max_vertices
-        self.__vertices = np.zeros((self.__max_vertices, 2+3+1), dtype='f4') # 2D points with 3D color and 1D visibility (x,y,r,g,b,v)
-        self.__vertex_count = 0
+        
+        self.__raw_vertices = np.zeros((self.__max_vertices,6), dtype='f4') # Raw vertices (in turtle-like coordinates). Must be in the form (x,y,r,g,b,a), implying (N,6) shape
+        self.__raw_vertices[0] = np.array([*self.position, *self.color, self.alpha]).reshape(-1,6) # Never pass this to the GPU, only the __vertices! (The only actual difference is the coordinates which are in turtle-like coordinates here)
+        
+        self.__raw_vertex_count = 1
 
-        # Add initial position
-        self.__vertices[0] = self.__pointTurtleToGL(self.position)
+        self.__vertices = np.zeros((self.__max_vertices, 2+3+1), dtype='f4') # Actual stuff to be passed to the GPU. Must be in the form (x,y,r,g,b,a), implying (N,6) shape
+        self.__vertices[0] = np.array([*self.__pointTurtleToGL(self.position), *self.color, self.alpha]).reshape(-1,6)
+
         self.__vertex_count = 1
 
+        self.__debug(f"__vertices shape check 1: raw:{self.__raw_vertices.shape}; vertices:{self.__vertices.shape}")
 
         self.__prog = self.ctx.program(
             vertex_shader=load_shader("shaders/line.vert"),
             fragment_shader=load_shader("shaders/line.frag"),
-        )# Shader prog 
+        ) # Shader prog 
+
         self.__vbo = self.ctx.buffer(self.__vertices[:self.__vertex_count].tobytes()) #  Vertex buffer (in VRAM)
         self.__vao = self.ctx.vertex_array(
             self.__prog, 
             self.__vbo, 
             # Varyings
-            "in_pos"
-        )
+            "in_pos","in_color", "in_alpha"
+        ) 
         
-        # Bind uniforms       
-        self.__prog['color']=self.color
         
-        self.__debug("OpenGL setup complete") # Add stuff here to debug
+        self.__debug("OpenGL setup complete")
 
     def __updateOpenGL(self):
         self.__debug(f"""Updating OpenGL
@@ -151,10 +156,6 @@ class Turtle:
         # Buffer update
         self.__vbo.orphan(size=self.__vertices[:self.__vertex_count].nbytes)
         self.__vbo.write(self.__vertices[:self.__vertex_count].tobytes())
-
-        # Update uniforms
-        self.ctx.line_width = self.thickness
-        self.__prog['color'] = self.color
 
     def __pointGLToTurtle(self, a: tuple):
         """
@@ -232,6 +233,8 @@ class Turtle:
     @__active
     def old_goto(self, point:tuple, color=None):
         """
+        **(Deprecated, do not use)**
+
         Moves the turtle to a specified position and draws a line to it.
         Args:
             point (tuple): A tuple (x, y) representing the new position in 
@@ -259,7 +262,7 @@ class Turtle:
             logger.warning("Vertex buffer full — cannot add more points")
             return
 
-        self.__vertices[self.__vertex_count] = gl_pos
+        self.__raw_vertices[self.__vertex_count] = gl_pos
         self.__vertex_count += 1
 
         self.__updateOpenGL() # Update buffer to include new point
@@ -267,75 +270,68 @@ class Turtle:
         self.__draw() # Render 
     
     @__active
-    def goto_path(self, points:list[tuple[float,float]] | np.ndarray, cleanCoords:bool=False, color:tuple[float,float]=None):
+    def bulk(self, points: np.ndarray):
         '''
         Draws a path of points.
-        It is a more efficient way to draw large structures (say, a million points) than calling goto() a million times.
-        Also speeds up drasrically if supplied directly with 'clean' coordinates that are:
-        - a NumPy array of shape (N, 2) 
-        - of datatype float32 (f4)
-        - each point already in OpenGL coordinates (ranged from -1.0 to 1.0)
+        Requirements:
+        - a NumPy array of shape (N, 6) (x,y,r,g,b,a)
+        - each point has TURTLE coordinates! (ranged from -(WINDOW/2) to (WINDOW/2))
         Args:
-            points (list or np.ndarray): A list of tuples or a NumPy array of shape (N, 2) representing the points to draw.
-            cleanCoords (bool): When False (by default), it means that the coordinates must be sanitized and transformed properly before rendering. If True, coords are assumed clean (see requirements above) and can be used in a more direct, faster way. Put True only if you are sure about data provided being correct, else unexpected and unhandled behavior may occur.
+            points (np.ndarray): A NumPy array of shape (N, 6) representing the points to draw.
         Returns:
             None
         '''
-        self.__debug(f"Goto bulk {points}")
+        self.__debug(f"Bulk {points}")
         
-        if color:
-            self.color = color
-        
-        self.position = points[-1]  # Update the position to the last point in the list
-        
-        if not cleanCoords:
-            # Tedious cleaning and conversion to OpenGL coords
-            if isinstance(points, np.ndarray):
-                # Validate shape and dtype
-                if len(points.shape) < 2 or points.shape[1] != 2:
-                    raise ValueError("NumPy array must be of shape (N, 2)")
-                if points.dtype != np.float32:
-                    points = points.astype('f4')
+        points = points.reshape(-1, 6) # Reshape to (N, 6)
 
-                # Assume turtle-like coords, convert. TODO: replace later with a bulk GPU-based conversion
-                """ gl_points = np.empty_like(points)
-                for i, p in enumerate(points):
-                    gl_points[i] = self.__pointTurtleToGL(tuple(p)) """
-                
-                # Faster conversion (allegedly)
-                gl_points = np.divide(points, np.array([(self.wwidth/2, self.wheight/2)],dtype='f4'))
-            else:
-                # Assume list of tuples
-                gl_points = np.array([self.__pointTurtleToGL(p) for p in points], dtype='f4')
-        else:
-            # Coords are already clean and nice
-            gl_points = points if isinstance(points, np.ndarray) else np.array(points, dtype='f4')
+        if points.dtype != 'f4':
+            points = points.astype('f4')
+        # if points.shape[1] != 6:
+        #     raise ValueError("Points must be of shape (N, 6) - x,y,r,g,b,a")
 
-        count = len(gl_points)
+        # Convert the points to OpenGL coordinates
+        points[:, :2] /= np.array([self.wwidth / 2, self.wheight / 2])
+    
+        count = len(points)
 
         # Safety check
         if self.__vertex_count + count > self.__max_vertices:
-            logger.warning(f"Turtle vertex buffer overflow: trying to add {count} points at {self.__vertex_count}")
-            count = self.__max_vertices - self.__vertex_count
-            gl_points = gl_points[:count]
+            self.__debug(f"Turtle vertex buffer overflow: trying to add {count} points while already having {self.__vertex_count} (limit {self.__max_vertices})")
+            count = self.__max_vertices - self.__vertex_count # Calculate the number of points that can be added
+            points = points[:count] # Crop points
 
         # Bulk insert
-        self.__vertices[self.__vertex_count:self.__vertex_count + count] = gl_points
+        self.__vertices[self.__vertex_count:self.__vertex_count + count] = points
         self.__vertex_count += count
-        self.__vertices
 
         self.__updateOpenGL() # Update buffer to include new points
         self.__draw() # Render
     
-    def goto(self, point:tuple[float,float]):
+    def goto(self, point:tuple[float,float], color:tuple[float,float,float]=None):
         """
-        Cumulative goto is a convenience wrapper method to build a path out of points one by one (see goto_path function)
-        
-        As for now, the color change is not supported. The color used will be the last one set by setColor.
-        Furthermore, sleeping/scheduling is not supported either (yet)
+        Moves the turtle to a specified position and draws a line to it.
+        Args:
+            point (tuple): A tuple (x, y) representing the new position in 
+                           turtle-like coordinates. The x and y values should 
+                           be within the range [-screen_width/2, screen_width/2] 
+                           and [-screen_height/2, screen_height/2], respectively.
+            color (tuple, optional): A tuple (r, g, b) representing the color 
+                                     of the line. Each value should be in the 
+                                     range [0.0, 1.0]. Defaults to (1.0, 0.0, 0.0) 
+                                     (red).
+        Returns:
+            None
         """
-        self.__cumulative_path = np.append(self.__cumulative_path, point).reshape(-1, 2) # Insert the new point at the end of the path
-    
+        if color:
+            self.color = color
+        if self.__raw_vertex_count + 1 >= self.__max_vertices:
+            self.__debug(f"Turtle vertex buffer overflow: trying to add a point while already having {self.__raw_vertex_count} (limit {self.__max_vertices})")
+        else:
+            self.__raw_vertex_count += 1
+            self.__raw_vertices[self.__raw_vertex_count - 1] = [*point, *self.color, self.alpha] # Insert the new point at the end of the path. WARNING: point coordinates are in turtle-like coordinates!! Call bulk() in the end!
+            
+
     @__active
     def setColor(self, color:tuple):
         """
@@ -374,8 +370,8 @@ class Turtle:
 
 
         # Cumulative ending 
-        if self.__cumulative_path.size > 1:
-            self.goto_path(self.__cumulative_path, cleanCoords=False)
+        if self.__raw_vertices.size > 1:
+            self.bulk(self.__raw_vertices)
 
 
     # Debug 
@@ -388,7 +384,7 @@ class Turtle:
         if not real:
             return self.__vertex_count
         else:
-            return self.__vertices.size / 2
+            return self.__raw_vertices.size / 2
 
 def run(window: Window):
     def decorator(function):
