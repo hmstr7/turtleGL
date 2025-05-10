@@ -1,6 +1,6 @@
 # TurtleGL
 
-TurtleGL is a Python-based graphics library made purely for fun (please do not use it for any serious purposes). It is a small stupid experiment I did because I thought normal turtle lacks parallelism (no, I did not implement parallelism and multithreading yet). If you wish to fill your VRAM with garbage and waste your system's resources, TurtleGL is definitely for you. 
+TurtleGL is a Python-based graphics library made purely for fun (please do not use it for any serious purposes). It is a small stupid experiment I did because I thought normal turtle lacks parallelism (no, I haven't implemented parallelism and multithreading yet). If you wish to fill your VRAM with garbage and waste your system's resources, TurtleGL is definitely for you. 
 
 ## Features
 
