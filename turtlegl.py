@@ -332,7 +332,7 @@ class Turtle:
             self.__raw_vertices[self.__raw_vertex_count - 1] = [*point, *self.color, self.alpha] # Insert the new point at the end of the path. WARNING: point coordinates are in turtle-like coordinates!! Call bulk() in the end!
             
 
-    @__active
+    #@__active
     def setColor(self, color:tuple):
         """
         Sets the color of the turtle.
@@ -345,8 +345,27 @@ class Turtle:
         self.__debug(f"Setting color to {color}")
         self.color = color
         
-        self.__updateOpenGL()
-        self.__draw()
+        # self.__updateOpenGL()
+        # self.__draw()
+    
+    def penup(self):
+        """
+        Lifts the pen up, so that moving the turtle does not draw a line.
+        Returns:
+            None
+        """
+        self.__debug("Pen up")
+        self.alpha = 0.0 # Set alpha to 0.0 to make the line invisible
+    
+    def pendown(self):
+        """
+        Puts the pen down, so that moving the turtle draws a line.
+        Returns:
+            None
+        """
+        self.__debug("Pen down")
+        self.alpha = 1.0
+
 
     def sleep(self, seconds: int | float):
         """
