@@ -390,7 +390,7 @@ class Turtle:
 
         # Cumulative ending 
         if self.__raw_vertices.size > 1:
-            self.bulk(self.__raw_vertices)
+            self.bulk(self.__raw_vertices[:self.__raw_vertex_count - 1]) # Bulk insert the last point
 
 
     # Debug 

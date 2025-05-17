@@ -1,7 +1,8 @@
 #version 330
 
-in vec3 color;
-in float alpha;
+flat in vec3 color;
+flat in float alpha;
+
 out vec4 fragColor;
 
 void main() {
