@@ -7,7 +7,6 @@ import numpy as np
 import logging
 import sys
 from typing import Callable
-from timeit import timeit
 
 DEBUG = False
 
@@ -22,19 +21,35 @@ class Window(pyglet.window.Window):
         self.ctx.viewport = (0, 0, self.width, self.height)
         self.turtles = []
 
-        self.clock = pyglet.clock.Clock()
+        self.clock = pyglet.clock.get_default()
+        self.__start_time = None
+        self.time = None
         self.set_vsync(vsync)  # Set vsync to True or False based on the parameter
 
 
         self.mainloop = None
         self.needs_redraw = True  # Flag to indicate if a redraw is needed
+        self.time_label = pyglet.text.Label(
+            text="Time: 0.0",
+            font_name="Arial",
+            font_size=14,
+            x=10,  # Position from the left
+            y=self.height - 20,  # Position from the top
+            anchor_x="left",
+            anchor_y="top",
+            color=(255, 255, 255, 255),  # White color
+        )
     def __debug(self, msg:str):
         """Debugging wrapper for DEBUG level logs"""
         logger.debug(msg)
+
     def on_draw(self):
         self.clear()
         self.ctx.clear(0.1, 0.1, 0.1, 1.0)
         self.clock.tick()
+
+        
+
         if self.needs_redraw:  # Only call mainloop if redraw is needed
             try:
                 self.__debug("Calling mainloop")
@@ -52,6 +67,14 @@ class Window(pyglet.window.Window):
                     turtle._Turtle__draw()
             except Exception as e:
                 logging.error(f"Turtle draw call error: {e}")
+
+        if self.__start_time is None:
+            self.__start_time = self.clock.time()
+        self.time = self.clock.time() - self.__start_time
+
+        # Update the time label
+        self.time_label.text = f"Time: {self.time:.2f}"  # Format time to 2 decimal places
+        self.time_label.draw()
 
     def request_redraw(self):
         """Call this method to request a rerun of the mainloop."""
@@ -121,13 +144,13 @@ class Turtle:
         # Preallocate array of fixed size for vertices
         self.__max_vertices = max_vertices
         
-        self.__raw_vertices = np.zeros((self.__max_vertices,6), dtype='f4') # Raw vertices (in turtle-like coordinates). Must be in the form (x,y,r,g,b,a), implying (N,6) shape
-        self.__raw_vertices[0] = np.array([*self.position, *self.color, self.alpha]).reshape(-1,6) # Never pass this to the GPU, only the __vertices! (The only actual difference is the coordinates which are in turtle-like coordinates here)
+        self.__raw_vertices = np.zeros((self.__max_vertices,7), dtype='f4') # Raw vertices (in turtle-like coordinates). Must be in the form (x,y,r,g,b,a,t), implying (N,6) shape
+        self.__raw_vertices[0] = np.array([*self.position, *self.color, self.alpha, self.__sleeptime]).reshape(-1,7) # Never pass this to the GPU, only the __vertices! (The only actual difference is the coordinates which are in turtle-like coordinates here)
         
         self.__raw_vertex_count = 1
 
-        self.__vertices = np.zeros((self.__max_vertices, 2+3+1), dtype='f4') # Actual stuff to be passed to the GPU. Must be in the form (x,y,r,g,b,a), implying (N,6) shape
-        self.__vertices[0] = np.array([*self.__pointTurtleToGL(self.position), *self.color, self.alpha]).reshape(-1,6)
+        self.__vertices = np.zeros((self.__max_vertices, 2+3+1+1), dtype='f4') # Actual stuff to be passed to the GPU. Must be in the form (x,y,r,g,b,a,t), implying (N,6) shape
+        self.__vertices[0] = np.array([*self.__pointTurtleToGL(self.position), *self.color, self.alpha, self.__sleeptime]).reshape(-1,7)
 
         self.__vertex_count = 1
 
@@ -143,7 +166,7 @@ class Turtle:
             self.__prog, 
             self.__vbo, 
             # Varyings
-            "in_pos","in_color", "in_alpha"
+            "in_pos","in_color", "in_alpha","in_timing"
         ) 
         
         
@@ -194,6 +217,8 @@ class Turtle:
         """
         Renders all vertices using current OpenGL render mode. This function should be called after any impactful method call.
         """
+        if self.window.time is not None:
+            self.__prog["time"]= self.window.time # Set the time uniform in the shader
         self.__vao.render(mode=self.__render_mode, vertices=self.__vertex_count) # Draw the line using the current render mode
 
 
@@ -269,26 +294,24 @@ class Turtle:
 
         self.__draw() # Render 
     
-    @__active
+    #@__active
     def bulk(self, points: np.ndarray):
         '''
         Draws a path of points.
         Requirements:
-        - a NumPy array of shape (N, 6) (x,y,r,g,b,a)
+        - a NumPy array of shape (N, 7) (x,y,r,g,b,a,t)
         - each point has TURTLE coordinates! (ranged from -(WINDOW/2) to (WINDOW/2))
         Args:
-            points (np.ndarray): A NumPy array of shape (N, 6) representing the points to draw.
+            points (np.ndarray): A NumPy array of shape (N, 7) representing the points to draw.
         Returns:
             None
         '''
         self.__debug(f"Bulk {points}")
         
-        points = points.reshape(-1, 6) # Reshape to (N, 6)
+        points = points.reshape(-1, 7) # Reshape to (N, 7)
 
         if points.dtype != 'f4':
             points = points.astype('f4')
-        # if points.shape[1] != 6:
-        #     raise ValueError("Points must be of shape (N, 6) - x,y,r,g,b,a")
 
         # Convert the points to OpenGL coordinates
         points[:, :2] /= np.array([self.wwidth / 2, self.wheight / 2])
@@ -299,6 +322,10 @@ class Turtle:
         if self.__vertex_count + count > self.__max_vertices:
             self.__debug(f"Turtle vertex buffer overflow: trying to add {count} points while already having {self.__vertex_count} (limit {self.__max_vertices})")
             count = self.__max_vertices - self.__vertex_count # Calculate the number of points that can be added
+            if count <= 0:
+                self.__debug("Vertex buffer full — cannot add more points")
+                count = 0
+                return
             points = points[:count] # Crop points
 
         # Bulk insert
@@ -329,10 +356,10 @@ class Turtle:
             self.__debug(f"Turtle vertex buffer overflow: trying to add a point while already having {self.__raw_vertex_count} (limit {self.__max_vertices})")
         else:
             self.__raw_vertex_count += 1
-            self.__raw_vertices[self.__raw_vertex_count - 1] = [*point, *self.color, self.alpha] # Insert the new point at the end of the path. WARNING: point coordinates are in turtle-like coordinates!! Call bulk() in the end!
+            self.__raw_vertices[self.__raw_vertex_count - 1] = [*point, *self.color, self.alpha, self.__sleeptime] # Insert the new point at the end of the path. WARNING: point coordinates are in turtle-like coordinates!! Call bulk() in the end!
             
 
-    #@__active
+    
     def setColor(self, color:tuple):
         """
         Sets the color of the turtle.
@@ -344,9 +371,6 @@ class Turtle:
         """
         self.__debug(f"Setting color to {color}")
         self.color = color
-        
-        # self.__updateOpenGL()
-        # self.__draw()
     
     def penup(self):
         """
@@ -375,9 +399,9 @@ class Turtle:
         Returns:
             None
         """
-        self.__debug(f"Sleeping for {seconds} seconds")
+        self.__debug(f"{seconds} seconds delay added")
 
-        self.__sleeptime = seconds # Set the sleep time
+        self.__sleeptime += seconds # Set the sleep time
 
 
     # Extra methods
@@ -390,7 +414,7 @@ class Turtle:
 
         # Cumulative ending 
         if self.__raw_vertices.size > 1:
-            self.bulk(self.__raw_vertices[:self.__raw_vertex_count - 1]) # Bulk insert the last point
+            self.bulk(self.__raw_vertices[:self.__raw_vertex_count]) # Bulk insert the last point
 
 
     # Debug 
